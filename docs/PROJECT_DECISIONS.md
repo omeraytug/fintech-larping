@@ -1,13 +1,13 @@
 # Fintech Larper --- Project Decisions
 
-This file records the decisions made while working through
+This file is a concise record of decisions made while working through
 `PRE_CODING_TODO.md`. Detailed research and experimentation belong
-elsewhere; this is only a concise record of what was decided and why.
+elsewhere.
 
 ## 1. Stock Basket
 
-**Basket:** 5 individual U.S. stocks from different sectors, with a
-market-cap mix of **2 large, 2 mid, and 1 small**.
+**Decision:** Use 5 individual U.S. stocks from different sectors, with
+a market-cap mix of 2 large, 2 mid, and 1 small.
 
 Ticker Company Sector Size
 
@@ -19,104 +19,162 @@ Ticker Company Sector Size
 `HAE` Haemonetics Healthcare Mid
 `JJSF` J&J Snack Foods Consumer Staples Small
 
-The five sectors were chosen to give the experiment exposure to
-different market and business dynamics. Information Technology was
-deliberately assigned a large-cap stock, with NVIDIA selected to include
-exposure to the recent AI-driven growth cycle. This does not assume that
-AI exposure makes the series easier or harder to forecast; it simply
-gives the basket a deliberately interesting source of heterogeneity.
-
-The remaining size categories were randomly assigned before selecting
-companies:
-
-```text
-Financials       → Mid
-Energy           → Large
-Healthcare       → Mid
-Consumer Staples → Small
-```
-
-Stocks were then selected based on their assigned sector/size, adequate
-historical data, and reasonable liquidity rather than known historical
-forecasting performance. Market-cap labels refer to the approximate
-classification at the time of selection (October 2026) and may change
-over time.
-
----
+Stocks were selected for sector/size diversity, adequate historical
+data, and reasonable liquidity. Size labels refer to the approximate
+classification at selection time (October 2026).
 
 ## 2. Historical Data Source
 
-**Source:** Yahoo Finance via `yfinance`.
+**Decision:** Use Yahoo Finance via `yfinance`.
 
-Yahoo Finance was selected because it provides sufficient long-term daily market data for all five stocks without requiring a paid data service. `yfinance` is an unofficial client, so the project will not rely on Yahoo having a stable API contract or documented rate limit.
+Available OHLCV, adjusted close, dividends, and split data were
+validated for all five stocks. Market data will be ingested, validated,
+and persisted in PostgreSQL.
 
-The source was validated against the full V1 basket (`NVDA`, `FDS`, `XOM`, `HAE`, `JJSF`). It provides OHLC, adjusted close, volume, dividends, and stock splits with decades of historical coverage. Initial validation found no missing values, duplicate dates, non-positive prices, or negative volumes. One inconsistent OHLC observation was detected for FDS, reinforcing the need for validation during ingestion.
+```text
+Yahoo Finance → yfinance → ingestion → validation → PostgreSQL → ML pipeline
+```
 
-Corporate actions are retained explicitly. Yahoo's historical `Close` is split-adjusted, while `Adj Close` additionally accounts for distributions such as dividends. Dividend and split events will also be preserved rather than discarded.
-
-Fetched market data will be persisted in **PostgreSQL** instead of being downloaded directly by model-training code. The planned flow is:
-
-`Yahoo Finance → yfinance → ingestion → validation → PostgreSQL → ML pipeline`
-
-The initial ingestion will backfill historical data, while later runs will fetch recent data incrementally. Because Yahoo access is unofficial, ingestion should minimize requests and eventually handle retries/rate-limit failures.
+Corporate actions will be retained. Yahoo historical `Close` is
+split-adjusted; `Adj Close` additionally reflects distributions such as
+dividends.
 
 ## 3. Forecast Target
 
-**Target:** Daily `Close` price for each stock independently.
+**Decision:** Forecast daily `Close` for each stock.
 
-Forecasts will be evaluated at `t+1`, `t+5`, and `t+20`, where horizons
-refer to U.S. market trading sessions rather than calendar days. Multi-step
-forecasts will predict the complete trajectory through the horizon rather
-than only the final endpoint.
-
-Forecasts should include point predictions together with predictive
-uncertainty where supported. The exact uncertainty representation and
-interval/quantile levels will be decided separately in Decision 11.
+- Predict the complete trajectory from `t+1` through `t+20`.
+- Evaluate particularly at `t+1`, `t+5`, and `t+20`.
+- Horizons refer to U.S. market trading sessions.
+- Keep `Close` as the forecasting target across V1, V2, and V3.
+- Retain predictive uncertainty where supported; exact uncertainty
+  evaluation is Decision #11.
 
 ## 4. Model Inputs
 
-**V1:** Historical `Close` price only. Each stock is modeled independently
-without exogenous variables.
+**V1 --- OHLC**
 
-**V2:** May introduce relatively simple exogenous variables. The exact
-features will be selected during experimentation based on their usefulness
-and model support rather than fixed in advance.
+Historical Open, High, Low, and Close are available to the model.
 
-**V3:** Optionally explores more advanced external information such as
-macroeconomic, event, news, or sentiment features. This is outside the core
-scope of the project and is not required for completion.
+**V2 --- OHLCV**
 
-Only the V1 input specification is currently locked. V2 and V3 are
-experimental directions and may change as the selected models are
-evaluated.
+V1 plus historical Volume.
+
+**V3 --- richer/model-appropriate information**
+
+OHLCV plus more complex information or regressors appropriate to each
+model. Exact V3 inputs do not need to be identical across model families
+and will be selected later.
+
+The forecasting target remains future `Close` in every version.
 
 ## 5. Baselines
 
-Three baselines will be used: **naive/random walk, drift, and ARIMA**.
+**Decision:** Use naive/random walk, drift, and ARIMA.
 
-The naive forecast predicts the most recently observed `Close` throughout
-the forecast horizon. Drift provides a simple trend-extrapolation benchmark,
-while ARIMA provides a conventional fitted statistical forecasting
-benchmark.
+All baselines will use the same walk-forward evaluation framework and
+forecast horizons as the main models.
 
-All baselines will use the same data and walk-forward evaluation framework
-as the main model approaches.
+## 6. General-Purpose Foundation Model
 
-## 6. Foundation Model
+**Decision:** Use **TimesFM-3**.
 
-_Not decided yet._
+- Frozen pretrained model; no fine-tuning.
+- Same checkpoint across V1, V2, and V3.
+- V1 uses OHLC.
+- V2 uses OHLCV.
+- V3 may use richer supported covariates.
+- Forecast the complete trajectory through `t+20`.
+- Retain native probabilistic/quantile forecasts.
+- Pretrained weights have non-commercial usage restrictions;
+  acceptable for the current educational/research project.
 
-## 7. Adapted Pretrained Approach
+## 7. Finance-Specific Foundation Model
 
-_Not decided yet._
+**Decision:** Use **Kronos**.
 
-## 8. Custom Model
+Kronos will be evaluated in two modes:
 
-_Not decided yet._
+1.  **Zero-shot:** use the pretrained finance-specific model without
+    weight updates.
+2.  **Transfer learning:** fine-tune/adapt the pretrained model on the
+    target-stock training data and compare against its zero-shot
+    performance.
+
+Input progression:
+
+- **V1:** OHLC.
+- **V2:** OHLCV.
+- **V3:** OHLCV plus richer/model-appropriate information through an
+  appropriate adaptation strategy.
+
+Only future `Close` is evaluated, even if Kronos internally forecasts
+additional K-line fields.
+
+The exact Kronos checkpoint size, fine-tuning strategy, and V3
+adaptation design are not locked yet. The project's own leakage-safe
+training procedure will be used rather than blindly relying on the
+official CSV fine-tuning pipeline.
+
+## 8. Custom Models
+
+**Decision:** Use **XGBoost** and **N-HiTS** as the two custom models.
+
+Both models will be trained without external pretrained weights.
+
+### XGBoost
+
+XGBoost will represent the conventional supervised/tabular ML approach.
+
+- Uses explicitly engineered temporal features.
+- Predicts the future `Close` trajectory through `t+20`.
+- Supports the V1 → V2 → V3 information progression.
+
+### N-HiTS
+
+N-HiTS will represent the neural forecasting approach trained from scratch.
+
+- Trained from random initialization using NeuralForecast.
+- Directly predicts the future `Close` trajectory through `t+20`.
+- Supports historical, future, and static exogenous variables for the V1 → V2 → V3 progression.
+
+LightGBM and LSTM are retained as fallback alternatives but are not part of the primary experiment.
+
+The exact feature engineering, internal target representation, training scope, normalization, lookback lengths, and training procedure will be decided during the experiment-design stage.
 
 ## 9. Walk-Forward Evaluation
 
-_Not decided yet._
+**Decision:** Use an expanding-window walk-forward evaluation with 20-trading-session forecast blocks.
+
+### Timeline
+
+- **Historical start:** First U.S. trading session of 2016.
+- **Initial training period:** 2016–2021.
+- **Walk-forward evaluation period:** First trading session of 2022 through October 2, 2026.
+- **Walk-forward step:** 20 trading sessions.
+
+### Procedure
+
+At each forecast origin:
+
+1. Use all available data from the fixed 2016 start through the current forecast origin.
+2. Produce the complete `t+1...t+20` forecast trajectory.
+3. Evaluate the forecast once the next 20 trading sessions are observed.
+4. Append those 20 actual observations to the available history.
+5. Refit or update trainable models as required.
+6. Advance to the next 20-session forecast block and repeat.
+
+The training window is **expanding**, meaning the historical start remains fixed at 2016 while newly observed data is added after each walk-forward block.
+
+Performance will be evaluated across the complete `t+1...t+20` trajectory, with `t+1`, `t+5`, and `t+20` used as the primary reporting horizons.
+
+### Information Availability
+
+Each historical forecast must reproduce the information that would have been available at its forecast origin.
+
+Historical regressors may only contain observations available up to that origin. Future regressor values must not be used unless they were genuinely known in advance at the time of forecasting.
+
+The exact metrics, uncertainty evaluation, and model-selection procedure are handled in later experiment-design decisions.
 
 ## 10. Evaluation Metrics
 
